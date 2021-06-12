@@ -1,0 +1,797 @@
+; -----------------------------------------------------------------------------
+;
+; "Anty *AJEK Copy", done by Seban/Slight
+;
+; .O.	released at 2021.6.12
+; ..O
+; OOO	>>> Public Domain <<<
+;
+; some infos:
+;
+; - 1st version was released in 1992 (v.1.0)
+;   and was written using MAC/65 macro-assembler
+;
+; - this version is re-formated to XASM syntax
+;
+; - some necessary fixes was done but, source code
+;   is stil messy and far away from perfection. Sorry,
+;   but more cleanup in this old code makes no sense ;)
+;
+; - use XASM to compile (https://github.com/pfusik/xasm)
+;
+
+		opt	h+
+
+; screen editor control codes
+
+UP		equ	28
+DOWN		equ	29
+LEFT		equ	30
+RIGHT		equ	31
+BACKSPACE	equ	126
+EOL		equ	155
+DEL_LINE	equ	156
+
+; OS vectors & locations
+
+MEMLO		equ	$02e7
+
+CIO		equ	$e456
+EOUTCH		equ	$f2b0
+GETKEY		equ	$f2fd
+BELL		equ	$f556
+CLR_SCR		equ	$f420
+
+; OS zero page variables
+
+ROWCRS		equ	$54	; cursor position (row)
+COLCRS		equ	$55	; cursor position (column)
+
+; local zero-page variables
+
+		org	$f0
+
+status		org	*+1	; bit accumulation register when reading from tape
+crc		org	*+1	; CRC of data readed from tape
+sync_flag	org	*+1	; sync-tone "presence" flag
+wr_flag		org	*+1	; write flag -> non zero means data present in buffer
+hdr		org	*+4	; data-segment header bytes (start_addr, end_addr)
+ptr		org	*+2	; buffer pointer
+cnt		org	*+2	; loop counter
+
+		org	$b700	; code location (just under screen area)
+
+top		equ	*
+
+; -----------------------------------------------------------------------------
+; NMI/IRQ off, motor on, turbo interface on
+
+play	inc	$d40e		; disable NMI
+	sei			; disable IRQ
+	dec	$d301		; turn off OS
+
+	lda	#0
+	sta	$d400		; disable ANTIC DMA (screen off)
+	sta	crc		; init the CRC value
+
+	lda	#%00111000	; motor-off + DIR reg. select 
+	sta	$d302		; setup PACTL
+
+	lda	#%01100000	; setup PORTA I/O direction (bit #6 i bit #5 as outputs)
+	sta	$d300
+	
+	lda	#%00110100
+	sta	$d302		; turn motor ON
+	sta	$d303		; enable COMMAND line
+	rts 
+
+; -----------------------------------------------------------------------------
+; restore NMI/IRQ, turn motor off, turbo interface off
+
+stop	lda	#%00111000	; motor-off + DIR reg. select	
+	sta	$d302		; setup PACTL
+	
+	lda	#0		; all portA pins as inputs
+	sta	$d300
+	
+	lda	#%00111100	; motor-off + DATA reg. select
+	sta	$d302
+	sta	$d303		; de-activate COMMAND line
+
+	lda	#$ff
+	sta	$d301		; restore OS-ROM
+	lsr	$d40e		; restore NMI's
+	cli			; restore IRQ's
+	rts
+
+; -----------------------------------------------------------------------------
+; set interface mode
+;
+; IN:	Y=0 -> Turbo K.S.O.2000	[read from PORTA register ($D300), bit #7]
+;	Y=1 -> Turbo 2000F/AST	[read from SKCTL register ($D20F), bit #4]
+
+set_ifc	ldx	tb1,y		; get value from 1st table
+	stx	q0+1		; ... put directly
+	stx	q3+1		; ... in subroutines code
+	stx	w1+1		; (self mod. code used)
+	stx	w6+1
+	ldx	tb2,y		; get value from 2nd table
+	stx	q0+2		; ... and do the same 
+	stx	q3+2		; (self mod. code used again)
+	stx	w1+2
+	stx	w6+2
+	ldx	tb3,y		; get value from 3rd table
+	stx	q2+1		; ... and again
+	stx	w5+1		; use to modify the subroutines code
+	rts
+
+; turbo interfaces register-set tables
+
+tb1	dta	$00,$0f		; lo-byte of DATA register address
+tb2	dta	$d3,$d2		; hi-byte of DATA register address
+tb3	dta	$80,$10		; mask value to separate bit value from DATA register
+
+; -----------------------------------------------------------------------------
+; wait for sync tone
+
+wait	ldy	#0		; clr. sync pulse counter
+	
+	lda	#$ff		; init sync "found" flag
+	sta	sync_flag
+
+q2	lda	#$80		; we will test bit #7 in "KSO 2000" mode
+q0	bit	$d300		; test PORTA
+	bne	q0		; wait until logic "0"
+	
+	ldx	#0		; clear pulse len. 
+	stx	$d01a		; set COLBACK (black color)
+
+q1	inx			; inc. pulse len. count
+	bmi	wait		; pulse to long, restart seq!
+
+q3	bit	$d300		; test PORTA
+	beq	q1		; loop when logic "0" is present
+	
+	lda	#$c8		; load green-light colour value...
+	sta	$d01a		; then put in COLBAK register
+	
+	cpx	#54		; compare pulse length
+	bcc	wait		; if shorter than 54, restart sync! (pulse to short)
+	
+	iny			; inc. sync-pulse counter
+	bne	q2		; loop until 256 sync-pulses found!
+
+	rts
+
+; -----------------------------------------------------------------------------
+; read byte from tape-stream
+
+read	ldy	#8		; # of bits to get
+
+w4	ldx	$d20a		; get random byte
+
+w5	lda	#$80		; we will test bit #7 in "KSO 2000" mode
+w1	bit	$d300		; test PORTA
+	bne	w1		; wait for logic "0"
+	stx	$d01a		; put random number into COLBACK register
+
+	ldx	#0		; clear X reg. (will be used as pulse-length counter)
+w2	inx			; increment X reg.
+w6	bit	$d300		; test PORTA (in "KSO 2000" mode)
+	beq	w2		; wait for logic "1"
+	
+	lda	#$38		; put light-red...
+	sta	$d01a		; ...into COLBACK register
+	
+	cpx	#54		; compare pulse length
+	bcs	w3		; jump when longer then #54
+	ror	sync_flag	; shift "sync flag" (that means sync-tone perion is over)
+	cpx	#32		; compare pulse length again
+	
+	rol	status		; shift out carry bit into byte accumulation reg.
+	dey			; decrement bit counter
+	bne	w4		; loop until all 8 bit is read
+	
+	lda	status		; load decoded byte into A reg.
+	ldy	#1		; set operation status to 1
+	rts			; return
+
+w3	ldx	#$45		; sync-detected, change colour
+
+	bit	sync_flag	; test if sync-tone period was over
+	bmi	w5		; loop when bit #7 is set! (sync pulses still present)
+
+	stx	status		; when error, destroy byte in accumulation reg. (to avoid fake $ff bytes)
+	ldy	#140		; return with error #140 in Y reg.
+	rts
+
+; -----------------------------------------------------------------------------
+; print hex number
+;
+; IN:	A reg. byte value to print as HEX
+
+prn_hex pha			; store value of byte to print
+	lsr	@		; ... 
+	lsr	@		; ...	
+	lsr	@		; ...
+	lsr	@		; now we have the upper nibble of byte shifted to lowe nibble
+	jsr	digit		; print the lower nibble
+	pla			; restore byte value
+				; and print the lower-nibble
+
+digit	and	#$0f		; mask out the upper nibble
+	cmp	#$0a		; when >9 the carry but is set
+	sed			; enable 6502 decimal mode
+	adc	#'0'		; add ASCII value of "0". In the "decimal" hex digits are adjusted
+	cld			; disable BCD/Decimal mode
+	jmp	EOUTCH		; print out the char via system editor
+
+; -----------------------------------------------------------------------------
+; get key seq. and put if into buffer
+
+get_ln	ldy	#0
+
+e2	sty	grg+1		; save value of Y reg.
+	jsr	GETKEY		; call OS GETKEY routine
+
+grg	ldy	#0		; restore value of Y reg.
+	
+	cmp	#EOL		; is RETURN was pressed?
+	beq	ret		; yes!
+
+	cmp	#BACKSPACE	; is BACKSPACE was pressed?
+	beq	del
+	
+	cpy	#8		; max. filename length?
+	bcs	e2		; yes! then loop (then only RETURN or BACKSPACE keys allowed)
+	
+	cmp	#'0'		; entered char is lower than "0" key?
+	bcc	e2		; yes! so... char belongs to not-allowed chars, loop!
+	cmp	#'['		; entered char is hirer or equal than "[" key?
+	bcs	e2		; yes! so... char belongs to not-allowed chars, loop!
+	
+	sta	buf,y		; store entered char into filename buffer!
+	jsr	putc		; print out the char on screen
+	
+	iny			; incr. index reg.
+	bne	e2		; loop
+
+del	cpy	#0		; is there anything to delete?
+	beq	e2		; nope! so do the loop!
+	dey			; decr. index
+	lda	#BACKSPACE	; send BACKSPACE...
+	jsr	putc		; code to the screen (erase char before cursor)
+	lda	#' '		; ... the load "SPACE" value
+	sta	buf,y		; store it into buffer
+	bne	e2		; and do the loop!
+
+ret	cpy	#0		; if RETURN was pressed check if buffer is not empty!
+	beq	e2		; when empty, do the loop!
+	rts			; filename entered properly, return!
+
+; -----------------------------------------------------------------------------
+; put char routine
+
+putc	sty	pry+1		; store Y reg. value
+	stx	prx+1		; store X reg. value
+	jsr	EOUTCH		; call system editor char-out
+pry	ldy	#0
+prx	ldx	#0
+	rts
+
+; -----------------------------------------------------------------------------
+; selects disk drive number
+
+drv_sel	jsr	GETKEY		; call OS Get Key routine
+	cmp	#EOL		; RETURN was pressed?
+	beq	drv_dfl		; yes! select default drive (#1)
+	
+	cmp	#'1'		; check if drive number < 1
+	bcc	drv_sel		; yep! that's wrong, so do the loop
+	cmp	#'9'		; check if drive number > 8
+	bcs	drv_sel		; yep! that's wrong to! loop!
+	
+				; all OK! so we can store in filespec location
+				; but we must skip loading default value
+	dta	$2c		; we can use bit $xxxx mnemonic to skip next instruction!
+
+drv_dfl	lda #'1'		; setup default drive (#1)
+	sta spec+1
+	rts 
+
+; -----------------------------------------------------------------------------
+; prepare filename
+;
+; ... adds extension+EOL after first space found in filename
+
+add_ext	ldy	#0		; init index reg. (for filename)
+fn_slp	lda	buf,y		; search buffer...
+	cmp	#32		; for "SPACE" character
+	beq	fn_fnd		; found!
+	iny			; next char
+	cpy	#8		; all 8 chars of filename?
+	bne	fn_slp		; nope! do the loop!
+
+fn_fnd	ldx	#0		; init next index reg. (for extension)
+fn_sxt	lda	fxt,x		; load (next) extension char
+	sta	buf,y		; store in filename buffer
+	iny			; incr. index of filename
+	inx			; incr. index of ext.
+	cpx	#4		; all chars of filename extension?
+	bcc	fn_sxt		; nope!
+	lda	#EOL		; End of Line code
+	sta	buf,y		; add at end of buffer!
+	rts			; return
+
+; -----------------------------------------------------------------------------
+; print out error message
+;
+; IN:	Y reg. - error code value to print
+
+sig_err	tya			; store error code (passed in Y reg.)
+	pha			; ... on stack
+	
+	lda	#8		; print "Error #$" message
+	jsr	prn_msg
+
+	pla			; restore error code
+	jsr	prn_hex		; print it as hex
+	
+	jsr	close		; close channel #1 (may be opened!)
+	
+	lda	#EOL
+	jsr	putc		; print-out EOL
+	jsr	BELL		; make "BELL" sound
+	jsr	GETKEY		; wait for key
+
+	jmp	main		; restart program
+
+; -----------------------------------------------------------------------------
+; print message (mesage ID in A reg.)
+
+prn_msg	tay			; put message ID   into Y reg.
+	asl	@		; *2
+	tax			; put message ID*2 into X reg.
+	
+	lda	msg_len,y	; get message length from lookup table
+	sta	$348		; store in CIO length (lo-byte)
+
+	lda	msg_adr+0,x	; get lo-byte of message address
+	sta	$344		
+	lda	msg_adr+1,x	; get hi-byte of message address
+	sta	$345
+
+	lda	#$0b		; CIO "block write" command
+	sta	$342
+	ldx	#0		; select CIO channel #0 (system editor "E:")
+	stx	$349		; clear the hi-byte of block length
+
+	jmp	CIO		; call OS CIO routine
+
+; -----------------------------------------------------------------------------
+; program messages
+
+msg0	dta EOL,c"*",2,c"Anty *AJEK Copy 1.1"*,22,c"* - MEM: $",RIGHT,RIGHT,RIGHT,RIGHT
+	dta EOL,RIGHT,c"done by Seban/Slight (P) 1992,2021",EOL,EOL
+	dta c"Disk drive number ?"
+msg1	dta DEL_LINE,c"Enter ",c" OUTPUT "*,c" filename:",EOL
+msg2	dta UP,DEL_LINE,DEL_LINE
+msg3	dta c" - Correct (",c"Y"*,c"/N) ?"
+msg4	dta DEL_LINE,RIGHT,c"1) 2000F / AST",EOL,RIGHT,c"2) K.S.O. 2000",EOL
+	dta DOWN,RIGHT,RIGHT,RIGHT,c"Your choice ?"
+msg5	dta EOL,DOWN,c"Working...",EOL
+msg6	dta UP,DEL_LINE,c"status #$"
+msg7	dta c" - press key to restart !",EOL
+
+msg_err	dta c"Error #$"
+msg_end
+
+; message address table
+
+msg_adr	dta a(msg0),a(msg1),a(msg2),a(msg3)
+	dta a(msg4),a(msg5),a(msg6),a(msg7)
+	dta a(msg_err),a(spec),a(space)
+
+; message length table
+
+msg_len	dta b(msg1-msg0),b(msg2-msg1),b(msg3-msg2),b(msg4-msg3)
+	dta b(msg5-msg4),b(msg6-msg5),b(msg7-msg6),b(msg_err-msg7),b(msg_end-msg_err)
+	dta b(fxt-spec),b(fxt-space-1)
+
+; filespec & filename buffers
+
+space	dta c" "		; don't touch! must be before filespec!
+spec	dta c"D1:"		; filespec prefix
+buf	dta c"        .XEX",EOL	; filename buffer
+fxt	dta c".XEX"		; filename extension
+
+; -----------------------------------------------------------------------------
+; close CIO channel #1
+
+close	ldx	#$10		; select CIO channel #1
+	lda	#$0c		; "close" command
+	sta	$342,x
+	jmp	CIO
+
+; -----------------------------------------------------------------------------
+; open CIO channel #1 for binary write
+
+open	ldx	#$10		; select CIO channel #1
+	lda	#$03		; "open" command
+	sta	$342,x
+	
+	lda	#<spec		; set address of filespec.
+	sta	$344,x
+	lda	#>spec
+	sta	$345,x
+	
+	lda	#8		; open for "write"
+	sta	$34a,x
+	lda	#0
+	sta	$34b,x		; set ICAX2 to zero
+	
+	jmp	CIO		; call OS CIO routine
+
+; -----------------------------------------------------------------------------
+; put byte from A reg. to an output-stream
+
+bput	pha
+	ldx	#$10
+	lda	#$0b		; put bytes/write binary CIO command
+	sta	$342,x
+	lda	#0		; set data length to zero	
+	sta	$348,x
+	sta	$349,x
+	pla
+	jmp	CIO		; write byte from A register to opened file
+
+; -----------------------------------------------------------------------------
+; increment data pointer (skip reserved areas; program area and H/W reg. area)
+
+inc_ptr	inc	ptr+0		; increment lo-byte
+	bne	in_rts		; if no overflow then just return
+	inc	ptr+1		; increment hi-byte
+
+	pha			; store A reg. value on stack
+	lda	ptr+1		; load Hi-byte of address
+	cmp	#>top		; check if address in not in program area
+	bne	in_nxt		; nope, do next checks
+	lda	#$c0		; pointer is in program area (>top)
+				; then skip this area, ant set new address ($C000 -> RAM under OS-ROM)
+	bne	in_set		; save new address!
+
+in_nxt	cmp	#$d0		; check pointer address is not in hardware I/O space (>= $D000)
+	bne	in_done		; nope! all checks done!
+	lda	#$d8		; set new address after hardware I/O space ($D800)
+in_set	sta	ptr+1
+
+in_done	pla
+in_rts	rts
+
+; -----------------------------------------------------------------------------
+;  moves MEMLO value to ptr
+
+mlo2ptr	ldx	MEMLO+0		; load lo-byte of MEMLO			
+	ldy	MEMLO+1		; load hi-byte of MEMLO
+	stx	ptr+0		; store lo
+	sty	ptr+1		; store hi
+	rts
+
+; -----------------------------------------------------------------------------
+;  code starts here
+
+main	ldx	#$ff
+	txs			; init stack pointer
+	stx	$2fc		; clear last key-pressed
+	stx	$2c5		; set font brightness
+	inx			
+	stx	$22f		; turn off ANTIC's DMA (screen off!)
+	stx	$2c6		; set background color to black
+	jsr	CLR_SCR		; call OS clear screen routine
+
+	ldy	#11
+	
+e7	lda	#' '		; initialize filename buffer
+	cpy	#8
+	bcc	*+5
+	lda	fxt-8,y
+	sta	buf,y
+	dey
+	bpl	e7
+
+; calculate size of input data buffer
+
+	sec			; calculate (MEMTOP-MEMLO)
+	lda	#<top
+	sbc	MEMLO+0
+	pha
+	lda	#>top
+	sbc	MEMLO+1
+	clc			; add extra RAM under OS-ROM ($C000-$CFFF=>$1000 and $D800-$FFFF=>$2800)
+	adc	#$38		; $3800 bytes ($38/#56 pages) of additional memory
+
+; print out calculated free memory
+
+	ldx	#34		; set the cursor position
+	stx	COLCRS
+	inc	ROWCRS
+
+	jsr	prn_hex		; hi-byte
+	pla
+	jsr	prn_hex		; lo-byte
+
+	dec	ROWCRS		; move cursor to upper line
+
+	lda	#0		; print welcome message
+	jsr	prn_msg
+	
+	lda	#$22		; restore ANTIC DMA
+	sta	$22f
+	
+	jsr	drv_sel		; call drive select subroutine
+
+	lda	#1		; print message "Enter OUTPUT filename..."
+	jsr	prn_msg
+
+	lda	#9		; print the initial filespec
+	jsr	prn_msg		
+
+	lda	#6		; set the cursor in proper position
+	sta	COLCRS
+	dec	ROWCRS
+	lda	#LEFT
+	jsr	putc
+
+	jsr	get_ln		; call get line procedure		
+
+; refresh filename
+
+	lda	#2		; print out "line del" sequence
+	jsr	prn_msg
+
+	lda	#10		; print entered filespec 
+	jsr	prn_msg
+
+; ask to confirm filename
+
+	lda	#3		; print "correct ?" message
+	jsr	prn_msg
+	
+	jsr	GETKEY		; get user answer
+	cmp	#'Y'		; user agrees?
+	bne	main		; no! restart
+	
+	jsr	add_ext		; add extension to the filename
+
+; Turbo System Selection (T2000F/AST or K.S.O. 2000)
+
+	lda	#4		; print "interface type" selection message
+	jsr	prn_msg
+
+sel_lp	jsr	GETKEY		; read key
+	cmp	#'1'		; T2000F/AST
+	beq	sel_don
+	cmp	#'3'
+	bcs	sel_lp		; bad key! loop!
+
+sel_don	jsr	putc		; put char on screen (pressed key/selected option)
+
+	and	#$01		; mask out invalid values
+	tay			; push to Y reg.
+	jsr	set_ifc		; call interface type select subroutine
+
+	lda	#5		; print out "Working..." message
+	jsr	prn_msg
+
+; start processing data
+
+	jsr	close		; CLOSE channel #1
+	jsr	open		; try to OPEN channel #1
+	bpl	opn_ok		; jump if opened OK!
+	jmp	sig_err		; error occurred!
+
+opn_ok	lda	#$ff		; put $FF,$FF header bytes at output file
+	jsr	bput
+	jsr	bput
+
+; start reading data segment from tape
+
+sync_lp	jsr	play		; init turbo interface
+	jsr	wait		; wait for sync-tone
+	bpl	ok		; found and all is OK!
+	
+; tape error
+
+tap_err	jsr	stop		; stop turbo interface
+	ldy	#140		; load error code
+	jmp	sig_err		; handle the error!
+
+; sync-tone found, time to read file header
+
+ok	jsr	mlo2ptr		; copy MEM-LO to buffer pointer
+
+	lda	#$00		; init wr_flag
+	sta	wr_flag
+
+nxt_blk	lda	#4		; set counter (# of header bytes to read from tape)
+	sta	cnt
+
+	lda	#hdr		; put header address direct in code (self mod. code)
+	sta	hdr_loc+1
+
+hdr_lop	jsr	read		; read byte from stream (byte is in A reg.)
+;	bmi	tap_err		; !!! don't check error's in 4 byte header !!!
+				; last block with EoF marker ($ff,$ff) is intentionally corrupted
+
+hdr_loc	sta	hdr		; store it header area
+	
+	clc			; update crc
+	adc	crc
+	sta	crc
+	
+	inc	hdr_loc+1	; inc. header adr.
+	
+	dec	cnt		; decr. header bytes counter
+	bne	hdr_lop		; repeat until all bytes of header is readed
+	
+	lda	hdr+0		; check header bytes
+	and	hdr+1
+	cmp	#$ff		; $FF,$FF means end of file!
+	bne	*+5
+	jmp	eof
+
+; copy header to output buffer
+
+	ldx	#0		; init loop counter
+	ldy	#0		; clear Y reg. (offset=0)
+
+hdr_cpy	lda	hdr,x		; copy header bytes...
+	sta	(ptr),y		; ... to dest. pointer adr.
+	
+	jsr	inc_ptr		; incr. dest. pointer
+
+	inx			; next byte
+	cpx	#4		; all bytes of header done?
+	bcc	hdr_cpy		; no, then loop!
+
+; time to read data block from tape
+; 
+; we need to calculate bytes to read => (end_address - start_address +1)
+
+	sec			; subtract lo-bytes
+	lda	hdr+2			
+	sbc	hdr+0			
+	tax
+	lda	hdr+3		; subtract hi-bytes
+	sbc	hdr+1
+	tay
+	
+	inx			; +1 to calculated segment size
+	bne	*+3
+	iny
+	
+	stx	cnt+0		; store result into cnt variable
+	sty	cnt+1
+
+blk_lop	jsr	read
+	bmi	tap_err		; check for transmission errors
+
+	ldy	#0		; store data in output buffer
+	sta	(ptr),y
+	
+	clc			; update CRC
+	adc	crc
+	sta	crc
+	
+	jsr	inc_ptr		; increment buffer pointer
+	
+	lda	cnt+0		; decrement counter (block length)
+	bne	*+4
+	dec	cnt+1
+	dec	cnt+0
+	
+	lda	cnt+0		; any data left?
+	ora	cnt+1
+	bne	blk_lop		; loop until data is present
+	
+; time to read and check CRC!
+
+j7	jsr	read		; read CRC byte from stream
+	cmp	crc		; compare with actual CRC
+	beq	crc_ok
+	
+; handle CRC error	
+
+	jsr	stop		; stop the tape
+	ldy	#143		; load CRC Error value
+	jmp	sig_err		; handle error!
+
+crc_ok	lda	#0		; clear CRC before reading next block
+	sta	crc
+
+	inc	wr_flag		; inc. wr_flag (means that data segment is present in buffer)
+
+; check if that was INIT-segment
+
+	ldx	hdr+2			
+	ldy	hdr+3
+	cpx	#$e3		; compare Lo-byte
+	bne	nxxt
+	cpy	#$02		; compare Hi-byte
+	beq	*+5
+nxxt	jmp	nxt_blk		; non INIT segment, so read next block.
+
+ini_seg	jsr	stop		; turn off motor and turbo interface
+
+; save data blocks to disk
+
+	jsr	sav_bfr		; save segment to disk
+	bpl	*+5		; check I/O status
+wr_err	jmp	sig_err
+
+	jmp	sync_lp		; read next blocks
+
+; end of file
+
+eof	jsr	stop		; stop the tape, turbo interface off!
+
+	lda	wr_flag		; check if any data left in buffer
+	beq	done		; zero means => no data present
+	jsr	sav_bfr		; save remaining data from buffer
+	bmi	wr_err
+
+done	lda	#6		; print "status" message
+	jsr	prn_msg
+
+	jsr	close		; close CIO channel #1
+	tya
+	jsr	prn_hex		; print out status
+
+	lda	#7		; print "press any key" message
+	jsr	prn_msg
+
+	lda	#$ff
+	sta	$2fc		; clear last-key pressed (if any)
+	jsr	GETKEY		; wait for key
+	jmp	main		; restart program
+
+; -----------------------------------------------------------------------------
+; this procedure writes the data from buffer to output file
+
+sav_bfr	ldx	ptr+0		; store end of data address
+	ldy	ptr+1
+	stx	cpl+1		; in code body (self mod. code)
+	sty	cph+1
+
+	jsr	mlo2ptr		; setup buffer pointer
+
+cp_loop	inc	$d40e		; disable NMI's
+	sei			; disable IRQ's
+	dec	$d301		; disable OS-ROM
+	ldy	#0
+	lda	(ptr),y		; get byte
+	inc	$d301		; restore OS-ROM
+	lsr	$d40e		; restore NMI's
+	cli			; restore IRQ's
+
+	jsr	bput		; write byte from A to output stream
+	bmi	wrt_err
+
+	jsr	inc_ptr		; increment src. pointer
+	
+	lda	ptr+0		; compare lo-byte
+cpl	cmp	#0
+	lda	ptr+1		; compare hi-byte
+cph	sbc	#0
+	bcc	cp_loop		; loop until all data is written
+
+	ldy	#$00
+	sty	wr_flag		; clear wr_flag (0 means, all data written)
+	iny
+wrt_err	rts
+
+	ert	*>$bc1f		; check if code does not destroy Display List & Screen memory
+
+	run	main		; generate RUN segment
+
+	end
