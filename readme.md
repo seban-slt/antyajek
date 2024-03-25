@@ -7,6 +7,8 @@ This program is a copy program for Atari 8-bit computers, that reads files prote
 
 As a young person unable to accept such an approach of these individuals, I decided to write a program that would reverse the operation of the Speedy 2700, enabling the transfer of files saved in this format to the original form. And that is why in 1992 `"Anty *AJEK Copy"` was created.
 
+![AntyAjek screenshot](scr/anty_ajek.gif)
+
 This program would probably never see the light of day and it would rot in the depths of my junk-yard, but after almost 30 years I found a tape recorded in this format, and when I was trying to read this very old tape, with software for 8-bit Atari computers, it turned out that one is using the Speedy 2700 format.
 
 After a while, I remembered that a long time ago I wrote a program that allows you to read and restore such files, so I decided to use it again. However, it turned out that not all the files from this cassette can be copied correctly using my old software.
