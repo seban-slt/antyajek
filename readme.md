@@ -31,7 +31,7 @@ After nearly 30 years, I've decided to publish the source code. It contains rout
 
 This software must be run from DOS on original Atari hardware. It reads data from cassette and writes the file segments to disk in Atari binary DOS format. A functioning `"D:"` device (disk drive) is required, hence the need for DOS.
 
-If you're using an emulator (with turbo tape support enabled), you can use the program without DOS. However, you must enable a virtual hard disk and configure the virtual `"H:"` device to act as the `"D:"` device.
+If you're using an emulator (with turbo tape support enabled), you can use the program without DOS. However, you must enable a virtual hard disk and configure the `"H:"` device ~~to act as the `"D:"` device~~ — starting from version **1.4**, the program allows selecting `"H:"` directly.
 
 The data buffer depends on the MEMLO value. The program uses the following memory regions:
 
@@ -56,7 +56,7 @@ Both error indicates that the data on tape is probably corrupted and probably ca
 
 ## How to compile
 
-You can user XASM or silimar syntax compatible cross-assember, for egzample [MADS](https://mads.atari8.info/).
+You can use XASM or silimar syntax compatible cross-assember, for egzample [MADS](https://mads.atari8.info/).
 
 If You are using XASM, just type:
 
