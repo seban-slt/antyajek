@@ -3,51 +3,51 @@
 
 ## The Story
 
-This program is a copy program for Atari 8-bit computers, that reads files protected by "Speedy 2700 Turbo Loader". Speedy 2700 is format of storing files in a copy-protected form for a "Turbo 2000" compatible system. This software was used in '90 by traders of "pirate software". They often sell tapes for Atari 8-bit computers with games and other software that was protected by using the Speedy 2700 software. In their view, it was supposed to be a safeguard aimed at restricting competition.
+This is a file copying program for Atari 8-bit computers, designed to read files protected with the "Speedy 2700 Turbo Loader." Speedy 2700 is a format used to store files in a copy-protected way, compatible with the "Turbo 2000" system. Back in the 1990s, it was commonly used by traders of so-called "pirate software"—they often sold tapes with games and other programs protected using Speedy 2700. In their view, it served as a safeguard to limit competition.
 
-As a young person unable to accept such an approach of these individuals, I decided to write a program that would reverse the operation of the Speedy 2700, enabling the transfer of files saved in this format to the original form. And that is why in 1992 `"Anty *AJEK Copy"` was created.
+As a young person unwilling to accept such practices, I decided to write a program that would reverse-engineer Speedy 2700, allowing files stored in this format to be restored to their original state. And so, in 1992, `"Anty *AJEK Copy"` was born.
 
 ![AntyAjek screenshot](scr/anty_ajek.gif)
 
-This program would probably never see the light of day and it would rot in the depths of my junk-yard, but after almost 30 years I found a tape recorded in this format, and when I was trying to read this very old tape, with software for 8-bit Atari computers, it turned out that one is using the Speedy 2700 format.
+This program might have remained lost forever, rotting in my personal junkyard, if I hadn't recently come across a tape recorded in this format. While trying to read it—nearly 30 years later—it turned out the tape used the Speedy 2700 format.
 
-After a while, I remembered that a long time ago I wrote a program that allows you to read and restore such files, so I decided to use it again. However, it turned out that not all the files from this cassette can be copied correctly using my old software.
+I suddenly remembered I had once written software capable of reading and restoring such files. I tried using it again, but unfortunately, not all files from the tape could be copied correctly using my old code.
 
-The software I developed as a teenager had some serious bugs that prevented all files from being restored correctly. Unfortunately, in 1992 I did not have enough test sets on which to check my code properly.
+The version I had written as a teenager contained serious bugs that prevented proper file recovery. Back in 1992, I simply didn’t have enough test cases to debug it thoroughly.
 
-Years later, when I came across a cassette containing files in this format, I could understand what mistakes I made when writing the previous code. I don't know by what miracle, but the "Anti *AJEK Copy" sources survived all these years on my old floppy disks.
+Now, decades later, I could finally see what mistakes I had made. Miraculously, the source code for "Anty *AJEK Copy" had survived on some of my old floppy disks.
 
-When I saw this code, I started to wonder if it was really my code :) It was so primitive and unreadable, that it could serve as a guide "you shouldn't write code this way" ;)
+When I looked at the code again, I genuinely wondered if I had written it—it was so primitive and unreadable, it could serve as a case study for “how not to write code.” ;)
 
-In 1992 I used the [MAC/65](https://en.wikipedia.org/wiki/MAC/65) Macro-Assember, and in my messy source code some numbers were written in the decimal system, some in the hexadecimal system, also I used 1-2 letter labels. I didn't use system variable names, I just referred to addresses directly. Writing code this way was very stupid thing, and now it appears as a real nightmare. Looking into it, after all those years, I had a big problem with understanding what is happening in this code. However, I decided to correct the mistakes and transfer the found files to the original Atari DOS format.
+In 1992, I used the [MAC/65](https://en.wikipedia.org/wiki/MAC/65) macro assembler. My messy code mixed decimal and hexadecimal values, used one- or two-letter labels, and referred directly to memory addresses instead of using system variable names. Looking at it now, it’s a real nightmare. I had a hard time understanding what the code even did. Still, I decided to fix the bugs and restore the files into the original Atari DOS format.
 
-To do this, however, I had to decide whether to keep trying to fight MAC/65 or use cross-assembler. At first I tried to use a MAC/65 compatible cross-assembler called [OMC/65](https://github.com/pkali/omc65) but this one couldn't handle such sloppy code. So I decided to convert the sources to [XASM](https://github.com/pfusik/xasm) syntax.
+At this point, I had to decide whether to keep working with MAC/65 or switch to a cross-assembler. I initially tried [OMC/65](https://github.com/pkali/omc65), which is MAC/65-compatible, but it couldn’t handle my messy sources. So I ported the code to XASM syntax.
 
-I fixed what I could, shortened the code a bit, but did not bring it to the form that one would expect from a readable source. References to hardware registers and system locations (eg IOCB) are still in the form of direct references to addresses, so I think you can still show this code as an example of how not to write code ;]
+I cleaned up what I could, shortened the code a bit, but it’s still far from what you'd call readable. Hardware register references and system addresses (like IOCB) are still hardcoded, so yes, it's still an example of bad coding style. ;]
 
-However, after these 30 years, I decided to make these sources public. First of all, they contain procedures for reading data stored in Speedy 2700 format. Maybe one day, someone will want to be able to recover some files stored in Speedy 2700 format, and if it turns out that the program still contains errors, it will be possible to make corrections in it.
+After nearly 30 years, I've decided to publish the source code. It contains routines for reading data in Speedy 2700 format, and maybe someday, someone else will want to recover files saved in that format. If bugs remain, now at least they can be fixed.
 
 ## How to use it
 
-This software must be run from DOS on original hardware. It reads data stream from tape, and then it writes the file segments to disk in Atari binary DOS format. The "D:" device must be present, so that's DOS is necessary.
+This software must be run from DOS on original Atari hardware. It reads data from cassette and writes the file segments to disk in Atari binary DOS format. A functioning `"D:"` device (disk drive) is required, hence the need for DOS.
 
-Using the emulator (with turbo tape support enabled) You can use this piece of software without DOS, but You must enable virtual hard-disk option, and allow Virtual "H:" device to act as "D:" device also.
+If you're using an emulator (with turbo tape support enabled), you can use the program without DOS. However, you must enable a virtual hard disk and configure the virtual `"H:"` device to act as the `"D:"` device.
 
-The buffer for data depends on MEMLO value. the program uses the following areas to store data:
+The data buffer depends on the MEMLO value. The program uses the following memory regions:
 
-```txt
+```text
 * from MEMLO to $B6FF
 * from $C000 to $CFFF
 * from $D800 to $FFFF
 ```
 
-The cassette recorder must have an "Turbo System" upgrade installed. This software works with interfaces compatible with Turbo 2000F/2001 or AST or Turbo K.S.O. 2000 interfaces.
+Your cassette recorder must have a "Turbo System" upgrade installed. This software supports Turbo 2000F/2001, AST, or Turbo K.S.O. 2000-compatible interfaces.
 
-This program reads Speedy 2700 blocks directly, so You must skip the name header block, the loader block, and position the tape at first block of data written in Speedy 2700 format.
+It reads Speedy 2700 blocks directly, so you must skip the name header and loader block, and position the tape at the *first data block* in Speedy 2700 format.
 
-During reading the tape there can occur two type of errors:
+During tape reading, two types of errors may occur:
 
-```txt
+```text
 Error #$8F means CRC error.
 Error #$8C means pulse length error was detected
 ```
@@ -64,38 +64,44 @@ If You are using XASM, just type:
 
 ## Speedy 2700 data format
 
-Speedy 2700 uses pulses that are compatible with Turbo2000F/2001/KSO formats, so:
-* 1.00 ms pulse: sync/pilot tone
-* 0.50 ms pulse: means logic "1"
-* 0.25 ms pulse: means logic "0"
+Speedy 2700 uses pulse lengths compatible with Turbo 2000F/2001/K.S.O. formats:
 
-1st block stores the filename, so:
+  - `1.00 ms pulse` — sync/pilot tone
+  - `0.50 ms pulse` — represents logic "1"
+  - `0.25 ms pulse` — represents logic "0"
 
-* $1000 (4096) sync-tone pulses
-* $00,$FF bytes idicies filename block
-* 10 bytes of filename
-* CRC byte
+**Block structure**
 
-2nd block stores the loader, this is plain 3072 bytes Turbo2000 block:
+1. **Filename Block**
 
-* $1000 (4096) sync-tone pulses
-* Lo-Byte, Hi-Byte contains block length
-* 3072 bytes of data
-* CRC byte
+    - `$1000 (4096)` sync pulses
+    - `$00, $FF` — block ID
+    - `10 bytes` — filename
+    - `1 byte` — CRC
 
-Next blocks is stored in Speedy2700 format, and it's called "data blocks", the format of data-block is:
+2. **Loader Block** *(plain 3072-byte Turbo 2000 block)*
 
-* $0600 (1536) sync-tone pulses
-* lo-byte,hi-byte of block loading address
-* lo-byte,hi-byte of block ending address
-* CRC byte
+    - `$1000 (4096)` sync pulses
+    - `2 bytes` — block length (Lo, Hi)
+    - `3072 bytes` — data
+    - `1 byte` — CRC
 
-the data-block is ended with one of two possible sequences:
+3. **Data Blocks** *(Speedy 2700 format)*
 
-* INIT-SEGMENT (block address is: $02E2-$02E3), then next two bytes (Lo,Hi) is INIT address 
-* or $FF,$FF bytes that means End of File
+    - `$0600 (1536)` sync pulses
+    - `2 bytes` — load address (Lo, Hi)
+    - `2 bytes` — end address (Lo, Hi)
+    - `block data` — stream of bytes (`block length = end_address-load_address+1`)
+    - `1 byte` — CRC
 
-If file have several data segments the stream is transmited constantly, but when INIT segment is present, then before next block, the sync-tone is present.
+### Data Block Ending Conditions
+
+Data blocks end with one of the following:
+
+- **INIT Segment** — Block address `$02E2–$02E3`, followed by 2 bytes `(Lo, Hi)` representing the **INIT address**  
+- **EOF Marker** — `$FF, $FF` indicating **End of File**
+
+If a file contains multiple data segments, the stream is continuous. When an INIT segment is present, a new **sync tone** appears before the next block.
 
 ## License
 
