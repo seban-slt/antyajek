@@ -22,8 +22,15 @@
 ; changelog:
 ;
 ; @2021.06.14
-; v.1.2 - changed I/O durig write operation (now writes are much faster)
+; v.1.2 - changed I/O durig write operation (now "writes" are much faster)
 ;
+; @2021.06.15
+; v.1.3 - added EXIT to DOS function   ( press   Q when selecting drive )
+;
+; @2025.05.28
+; v.1.4 - added device select H: or D :( press H/D when selecting drive )
+;
+;	- workaround for a critical bug in the buffer writeout procedure
 
 		opt	h+
 
@@ -81,10 +88,13 @@ buff_size	equ	$100
 ; -----------------------------------------------------------------------------
 ; program messages
 
-msg0	dta EOL,c"*",2,c"Anty *AJEK Copy 1.2"*,22,c"* - MEM: $",RIGHT,RIGHT,RIGHT,RIGHT
-	dta EOL,RIGHT,c"done by Seban/Slight (P) 1992,2021",EOL,EOL
-	dta c"Disk drive number ?"
-msg1	dta DEL_LINE,c"Enter ",c" OUTPUT "*,c" filename:",EOL
+msg0	dta EOL,c"*",2,c"Anty *AJEK Copy 1.4"*,22,c"* - MEM: $",RIGHT,RIGHT,RIGHT,RIGHT
+	dta EOL,RIGHT,c"done by Seban/Slight (P) 1992,2025",EOL,EOL
+
+	dta c"  [Q: DOS, H or D: Select Device]",EOL,EOL
+	dta c"Enter the disk drive number to use:"
+
+msg1	dta UP,UP,DEL_LINE,DEL_LINE,DEL_LINE,c"Enter ",c" OUTPUT "*,c" filename:",EOL
 msg2	dta UP,DEL_LINE,DEL_LINE
 msg3	dta c" - Correct (",c"Y"*,c"/N) ?"
 msg4	dta DEL_LINE,RIGHT,c"1) 2000F / AST",EOL,RIGHT,c"2) K.S.O. 2000",EOL
@@ -115,8 +125,47 @@ spec	dta c"D1:"		; filespec prefix
 buf	dta c"        .XEX",EOL	; filename buffer
 fxt	dta c".XEX"		; filename extension
 
+; helper procs 
 
-		ert	*>$6ff
+; -----------------------------------------------------------------------------
+; Moves MEMLO value to ptr with page-size upward alignment
+;
+
+mlo2ptr	ldx	#$00
+	stx	ptr+0
+	ldy	MEMLO+1
+	iny
+	sty	ptr+1
+	rts
+
+; -----------------------------------------------------------------------------
+; set interface mode
+;
+; IN:	Y=0 -> Turbo K.S.O.2000	[read from PORTA register ($D300), bit #7]
+;	Y=1 -> Turbo 2000F/AST	[read from SKCTL register ($D20F), bit #4]
+
+set_ifc	ldx	tb1,y		; get value from 1st table
+	stx	q0+1		; ... put directly
+	stx	q3+1		; ... in subroutines code
+	stx	w1+1		; (self mod. code used)
+	stx	w6+1
+	ldx	tb2,y		; get value from 2nd table
+	stx	q0+2		; ... and do the same
+	stx	q3+2		; (self mod. code used again)
+	stx	w1+2
+	stx	w6+2
+	ldx	tb3,y		; get value from 3rd table
+	stx	q2+1		; ... and again
+	stx	w5+1		; use to modify the subroutines code
+	rts
+
+; turbo interfaces register-set tables
+
+tb1	dta	$00,$0f		; lo-byte of DATA register address
+tb2	dta	$d3,$d2		; hi-byte of DATA register address
+tb3	dta	$80,$10		; mask value to separate bit value from DATA register
+
+	ert	*>$6ff
 
 		org	$b800	; code location (just under screen area)
 
@@ -162,33 +211,6 @@ stop	lda	#%00111000	; motor-off + DIR reg. select
 	lsr	$d40e		; restore NMI's
 	cli			; restore IRQ's
 	rts
-
-; -----------------------------------------------------------------------------
-; set interface mode
-;
-; IN:	Y=0 -> Turbo K.S.O.2000	[read from PORTA register ($D300), bit #7]
-;	Y=1 -> Turbo 2000F/AST	[read from SKCTL register ($D20F), bit #4]
-
-set_ifc	ldx	tb1,y		; get value from 1st table
-	stx	q0+1		; ... put directly
-	stx	q3+1		; ... in subroutines code
-	stx	w1+1		; (self mod. code used)
-	stx	w6+1
-	ldx	tb2,y		; get value from 2nd table
-	stx	q0+2		; ... and do the same
-	stx	q3+2		; (self mod. code used again)
-	stx	w1+2
-	stx	w6+2
-	ldx	tb3,y		; get value from 3rd table
-	stx	q2+1		; ... and again
-	stx	w5+1		; use to modify the subroutines code
-	rts
-
-; turbo interfaces register-set tables
-
-tb1	dta	$00,$0f		; lo-byte of DATA register address
-tb2	dta	$d3,$d2		; hi-byte of DATA register address
-tb3	dta	$80,$10		; mask value to separate bit value from DATA register
 
 ; -----------------------------------------------------------------------------
 ; wait for sync tone
@@ -342,10 +364,27 @@ prx	ldx	#0
 ; selects disk drive number
 
 drv_sel	jsr	GETKEY		; call OS Get Key routine
+	cmp	#'Q'		; Q was pressed?
+	beq	dos_ext
+
 	cmp	#EOL		; RETURN was pressed?
 	beq	drv_dfl		; yes! select default drive (#1)
 
-	cmp	#'1'		; check if drive number < 1
+	cmp	#'H'		; maybe 'H' pressed?
+	bne	drv_nk0		; no? chceck next key
+
+	lda	#'H'		; set device to "H:"
+	sta	spec
+	bne	drv_sel
+
+drv_nk0	cmp	#'D'		; maybe 'D' is pressed?
+	bne	drv_nk1		; no? check next keys!
+
+	lda	#'D'		; set device to "D:"
+	sta	spec
+	bne	drv_sel
+
+drv_nk1	cmp	#'1'		; check if drive number < 1
 	bcc	drv_sel		; yep! that's wrong, so do the loop
 	cmp	#'9'		; check if drive number > 8
 	bcs	drv_sel		; yep! that's wrong to! loop!
@@ -357,6 +396,11 @@ drv_sel	jsr	GETKEY		; call OS Get Key routine
 drv_dfl	lda #'1'		; setup default drive (#1)
 	sta spec+1
 	rts
+
+dos_ext	pla			; remove caller address from stack
+	pla
+	jmp	($0a)		; jmp at DOS vector!
+
 
 ; -----------------------------------------------------------------------------
 ; prepare filename
@@ -492,15 +536,6 @@ in_done	pla
 in_rts	rts
 
 ; -----------------------------------------------------------------------------
-;  moves MEMLO value to ptr
-
-mlo2ptr	ldx	MEMLO+0		; load lo-byte of MEMLO
-	ldy	MEMLO+1		; load hi-byte of MEMLO
-	stx	ptr+0		; store lo
-	sty	ptr+1		; store hi
-	rts
-
-; -----------------------------------------------------------------------------
 ;  code starts here
 
 main	ldx	#$ff
@@ -522,23 +557,24 @@ e7	lda	#' '		; initialize filename buffer
 	dey
 	bpl	e7
 
-; calculate size of input data buffer
-
-	sec			; calculate (MEMTOP-MEMLO)
-	lda	#<top
-	sbc	MEMLO+0
-	pha
-	lda	#>top
-	sbc	MEMLO+1
-	clc			; add extra RAM under OS-ROM ($C000-$CFFF=>$1000 and $D800-$FFFF=>$2800)
-	adc	#$38		; $3800 bytes ($38/#56 pages) of additional memory
-
-; print out calculated free memory
+; calculate size of input data buffer and print out calculated free memory
 
 	ldx	#34		; set the cursor position
 	stx	COLCRS
 	inc	ROWCRS
 
+	jsr	mlo2ptr		; get aligned MEMLO value
+
+	sec
+	lda	#<top		; TOPMEM - aligned MEMLO (lo-byte)
+	sbc	ptr
+	pha
+
+	lda	#>top		; TOPMEM - aligned MEMLO (hi-byte)
+	sbc	ptr+1
+	clc			; add extra RAM under OS-ROM ($C000-$CFFF=>$1000 and $D800-$FFFF=>$2800)
+	adc	#$38		; $3800 bytes ($38/#56 pages) of additional memory
+	
 	jsr	prn_hex		; hi-byte
 	pla
 	jsr	prn_hex		; lo-byte
