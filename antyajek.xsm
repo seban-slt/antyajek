@@ -31,6 +31,12 @@
 ; v.1.4 - added device select H: or D :( press H/D when selecting drive )
 ;
 ;	- workaround for a critical bug in the buffer writeout procedure
+;
+; @2025.05.30
+; v.1.5 - added motor control
+;       - added check for buffer overflow
+;	- minor fixes in user input sanity checking
+;	- another fix in free MEM size calc.
 
 		opt	h+
 
@@ -74,6 +80,9 @@ endp		org	*+2	; this pointer holds end of data in buffer
 dlen		org	*+2
 dlft		org	*+2
 
+blk_beg		equ	hdr	; aliases for better code readability
+blk_end		equ	hdr+2
+
 		ert	*>$ff
 
 ; tables & buffers
@@ -88,7 +97,7 @@ buff_size	equ	$100
 ; -----------------------------------------------------------------------------
 ; program messages
 
-msg0	dta EOL,c"*",2,c"Anty *AJEK Copy 1.4"*,22,c"* - MEM: $",RIGHT,RIGHT,RIGHT,RIGHT
+msg0	dta EOL,c"*",2,c"Anty *AJEK Copy 1.5"*,22,c"* - MEM: $",RIGHT,RIGHT,RIGHT,RIGHT
 	dta EOL,RIGHT,c"done by Seban/Slight (P) 1992,2025",EOL,EOL
 
 	dta c"  [Q: DOS, H or D: Select Device]",EOL,EOL
@@ -97,7 +106,7 @@ msg0	dta EOL,c"*",2,c"Anty *AJEK Copy 1.4"*,22,c"* - MEM: $",RIGHT,RIGHT,RIGHT,R
 msg1	dta UP,UP,DEL_LINE,DEL_LINE,DEL_LINE,c"Enter ",c" OUTPUT "*,c" filename:",EOL
 msg2	dta UP,DEL_LINE,DEL_LINE
 msg3	dta c" - Correct (",c"Y"*,c"/N) ?"
-msg4	dta DEL_LINE,RIGHT,c"1) 2000F / AST",EOL,RIGHT,c"2) K.S.O. 2000",EOL
+msg4	dta DEL_LINE,RIGHT,c"1) 2000F / AST",EOL,RIGHT,c"2) K.S.O. 2000",EOL,RIGHT,c"M) Toggle Motor Control",EOL
 	dta DOWN,RIGHT,RIGHT,RIGHT,c"Your choice ?"
 msg5	dta EOL,DOWN,c"Working...",EOL
 msg6	dta UP,DEL_LINE,c"status #$"
@@ -128,13 +137,27 @@ fxt	dta c".XEX"		; filename extension
 ; helper procs 
 
 ; -----------------------------------------------------------------------------
+; toggles the tape motor state
+;
+mtr_tgl	lda	#$b2	; toggle background color
+	eor	$2c8
+	sta	$2c8
+	sta	$2c6
+
+	lda	#$08	; toggle motor control
+	eor	$d302
+	sta	$d302
+	rts
+; -----------------------------------------------------------------------------
 ; Moves MEMLO value to ptr with page-size upward alignment
 ;
 
-mlo2ptr	ldx	#$00
-	stx	ptr+0
-	ldy	MEMLO+1
+mlo2ptr	ldy	MEMLO+1
+	ldx	MEMLO
+	beq	ml_ok
+	ldx	#0
 	iny
+ml_ok	stx	ptr+0
 	sty	ptr+1
 	rts
 
@@ -274,7 +297,8 @@ w6	bit	$d300		; test PORTA (in "KSO 2000" mode)
 	bne	w4		; loop until all 8 bit is read
 
 	lda	status		; load decoded byte into A reg.
-	ldy	#1		; set operation status to 1
+
+	ldy	#0		; set operation status to 0 (N=0 --> ALL OK!)
 	rts			; return
 
 w3	ldx	#$45		; sync-detected, change colour
@@ -628,16 +652,26 @@ e7	lda	#' '		; initialize filename buffer
 	jsr	prn_msg
 
 sel_lp	jsr	GETKEY		; read key
-	cmp	#'1'		; T2000F/AST
+
+	cmp	#'M'		; motor control
+	bne	sel_nxt
+	jsr	mtr_tgl
+	bne	sel_lp
+
+sel_nxt	cmp	#'1'		; T2000F/AST
 	beq	sel_don
-	cmp	#'3'
-	bcs	sel_lp		; bad key! loop!
+	cmp	#'2'
+	bne	sel_lp		; bad key! loop!
 
 sel_don	jsr	putc		; put char on screen (pressed key/selected option)
 
 	and	#$01		; mask out invalid values
 	tay			; push to Y reg.
 	jsr	set_ifc		; call interface type select subroutine
+
+	lda	$2c8
+	beq	*+5
+	jsr	mtr_tgl
 
 	lda	#5		; print out "Working..." message
 	jsr	prn_msg
@@ -661,8 +695,8 @@ sync_lp	jsr	play		; init turbo interface
 
 ; tape error
 
-tap_err	jsr	stop		; stop turbo interface
-	ldy	#140		; load error code
+tap_err	ldy	#140		; load the error code into Y reg.
+own_err	jsr	stop		; stop turbo interface
 	jmp	sig_err		; handle the error!
 
 ; sync-tone found, time to read file header
@@ -709,34 +743,32 @@ hdr_cpy	lda	hdr,x		; copy header bytes...
 
 	jsr	inc_ptr		; incr. dest. pointer
 
+	lda	ptr+1		; check for buffer overflow
+	beq	bfr_ovl
+
 	inx			; next byte
 	cpx	#4		; all bytes of header done?
 	bcc	hdr_cpy		; no, then loop!
 
 ; time to read data block from tape
 ;
-; we need to calculate bytes to read => (end_address - start_address +1)
+; calculate bytes to read ( negative counter/warp mode trick ;P )
 
-	sec			; subtract lo-bytes
-	lda	hdr+2
-	sbc	hdr+0
-	tax
-	lda	hdr+3		; subtract hi-bytes
-	sbc	hdr+1
-	tay
+	clc
+	lda	blk_beg
+	sbc	blk_end
+	sta	cnt
+	lda	blk_beg+1
+	sbc	blk_end+1
+	sta	cnt+1
 
-	inx			; +1 to calculated segment size
-	bne	*+3
-	iny
-
-	stx	cnt+0		; store result into cnt variable
-	sty	cnt+1
+; block read loop
 
 blk_lop	jsr	read
 	bmi	tap_err		; check for transmission errors
 
-	ldy	#0		; store data in output buffer
-	sta	(ptr),y
+;	ldy	#0		; Y=0 after correct read byte operation!
+	sta	(ptr),y		; store data in output buffer
 
 	clc			; update CRC
 	adc	crc
@@ -744,14 +776,16 @@ blk_lop	jsr	read
 
 	jsr	inc_ptr		; increment buffer pointer
 
-	lda	cnt+0		; decrement counter (block length)
-	bne	*+4
-	dec	cnt+1
-	dec	cnt+0
+	lda	ptr+1		; check hi-byte of buffer pointer (zero means buffer overflow)
+	bne	blk_cnt		; non zero? OK!
 
-	lda	cnt+0		; any data left?
-	ora	cnt+1
-	bne	blk_lop		; loop until data is present
+bfr_ovl	ldy	#158		; throw "out of memory" error ($9e)
+	bne	own_err
+
+blk_cnt	inc	cnt		; incr. counter and loop until overflow
+	bne	blk_lop
+	inc	cnt+1
+	bne	blk_lop
 
 ; time to read and check CRC!
 
