@@ -2,4 +2,4 @@
 *.xsm linguist-language=Assembly
 
 # Exclude Makefile from language statistics to avoid it dominating
-Makefile linguist-vendored
+makefile linguist-vendored
